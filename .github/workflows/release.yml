@@ -31,10 +31,6 @@ jobs:
         with:
           path: dist/${{ matrix.os }}
           key: ${{ matrix.go }}-${{ env.sha_short }}
-      - name: Build gcetcbendorsement
-        run: mkdir bin && go build -o bin/gcetcbendorsement -v ./gcetcbendorsement/cli
-      - name: Build non-production example endorse tool
-        run: go build -o bin/endorsenonprod -v ./cmd/nonprod
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v3
         if: success() && startsWith(github.ref, 'refs/tags/') && steps.cache.outputs.cache-hit != 'true'
