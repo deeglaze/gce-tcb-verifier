@@ -79,7 +79,7 @@ type Options struct {
 	EventLogLocation     string
 	UEFIVariableReader   exel.VariableReader
 	// Quote is any of the supported formats. If empty, the Provider will be used to get a quote.
-	Quote []byte
+	Quote any
 }
 
 // DefaultOptions returns the default options for RIM extraction.
@@ -156,9 +156,49 @@ func fromTdxAttestationProto(at *tpb.QuoteV4) string {
 	return extracttdx.GCETcbObjectName(at.GetTdQuoteBody().GetMrTd())
 }
 
+func fromSevGuestAttestation(a *spb.Attestation) *tpmpb.Attestation {
+	return &tpmpb.Attestation{TeeAttestation: &tpmpb.Attestation_SevSnpAttestation{SevSnpAttestation: a}}
+}
+func fromSevGuestReport(r *spb.Report) *tpmpb.Attestation {
+	return fromSevGuestAttestation(&spb.Attestation{Report: r})
+}
+func fromTdxQuoteV4(q *tpb.QuoteV4) *tpmpb.Attestation {
+	return &tpmpb.Attestation{TeeAttestation: &tpmpb.Attestation_TdxAttestation{TdxAttestation: q}}
+}
+
 // Attestation will try to deserialize a given attestation in any of the supported formats and
 // return it packaged in the most general format.
-func Attestation(quote []byte) (*tpmpb.Attestation, error) {
+func Attestation(quote any) (*tpmpb.Attestation, error) {
+	switch q := quote.(type) {
+	case *tpmpb.Attestation:
+		return q, nil
+	case *spb.Attestation:
+		return fromSevGuestAttestation(q), nil
+	case *spb.Report:
+		return fromSevGuestReport(q), nil
+	case *tpb.QuoteV4:
+		return fromTdxQuoteV4(q), nil
+	case []byte:
+		return AttestationFromBytes(q)
+	case string:
+		return AttestationFromBytes(decode([]byte(q)))
+	default:
+		return nil, fmt.Errorf("unknown quote format %T", q)
+	}
+}
+
+func decode(quote []byte) []byte {
+	if decoded, err := hex.DecodeString(string(quote)); err == nil {
+		return decoded
+	}
+	if decoded, err := io.ReadAll(base64.NewDecoder(base64.StdEncoding, bytes.NewReader(quote))); err == nil {
+		return decoded
+	}
+	return quote
+}
+
+// Attestation will try to translate any given attestation value into a go-tpm-tools attestation.
+func AttestationFromBytes(quote []byte) (*tpmpb.Attestation, error) {
 	if len(quote) == 0 {
 		return nil, ErrQuoteNil
 	}
@@ -171,50 +211,39 @@ func Attestation(quote []byte) (*tpmpb.Attestation, error) {
 	// a bad measurement deserialization.
 	sev := &spb.Attestation{}
 	if err := proto.Unmarshal(quote, sev); err == nil && len(sev.GetReport().GetMeasurement()) == abi.MeasurementSize {
-		tpmat.TeeAttestation = &tpmpb.Attestation_SevSnpAttestation{SevSnpAttestation: sev}
-		return tpmat, nil
+		return fromSevGuestAttestation(sev), nil
 	}
 	sev.Report = &spb.Report{}
 	if err := proto.Unmarshal(quote, sev.Report); err == nil {
-		sev.CertificateChain = nil
-		tpmat.TeeAttestation = &tpmpb.Attestation_SevSnpAttestation{SevSnpAttestation: sev}
-		return tpmat, nil
+		return fromSevGuestReport(sev.Report), nil
 	}
 
 	tdx := &tpb.QuoteV4{}
 	if err := proto.Unmarshal(quote, tdx); err == nil {
-		tpmat.TeeAttestation = &tpmpb.Attestation_TdxAttestation{TdxAttestation: tdx}
-		return tpmat, nil
+		return fromTdxQuoteV4(tdx), nil
 	}
 
 	// If hex- or base64-encoded, decode it.
-	if decoded, err := hex.DecodeString(string(quote)); err == nil {
-		quote = decoded
-	} else if decoded, err := io.ReadAll(base64.NewDecoder(base64.StdEncoding, bytes.NewReader(quote))); err == nil {
-		quote = decoded
-	}
+	quote = decode(quote)
 
 	// Attempt to decode as a raw SEV-SNP attestation.
 	// Get the raw quote and try to extract from the certificates.
 	if at, err := abi.ReportCertsToProto(quote); err == nil {
-		tpmat.TeeAttestation = &tpmpb.Attestation_SevSnpAttestation{SevSnpAttestation: at}
-		return tpmat, nil
+		return fromSevGuestAttestation(at), nil
 	}
 	// Attempt to decode as just the SEV-SNP certificate table.
 	certs := new(abi.CertTable)
 	if err := certs.Unmarshal(quote); err == nil {
 		sev.Report = &spb.Report{Measurement: []byte{0}}
 		sev.CertificateChain = certs.Proto()
-		tpmat.TeeAttestation = &tpmpb.Attestation_SevSnpAttestation{SevSnpAttestation: sev}
-		return tpmat, nil
+		return fromSevGuestAttestation(sev), nil
 	}
 
 	// Attempt to decode as a raw TDX quote.
 	if tdxquote, err := tabi.QuoteToProto(quote); err == nil {
 		switch tq := tdxquote.(type) {
 		case *tpb.QuoteV4:
-			tpmat.TeeAttestation = &tpmpb.Attestation_TdxAttestation{TdxAttestation: tq}
-			return tpmat, nil
+			return fromTdxQuoteV4(tq), nil
 		default:
 			return nil, fmt.Errorf("unknown TDX attestation format %T", tdxquote)
 		}
@@ -222,7 +251,7 @@ func Attestation(quote []byte) (*tpmpb.Attestation, error) {
 	return nil, ErrUnknownFormat
 }
 
-func (opts *Options) fromQuote(quote []byte) (endorsement []byte, objectName string, err error) {
+func (opts *Options) fromQuote(quote any) (endorsement []byte, objectName string, err error) {
 	// If an attestation from go-tpm-tools, try to extract the endorsement from the TEE attestation.
 	tpmat, err := Attestation(quote)
 	if err != nil {
