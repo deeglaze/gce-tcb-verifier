@@ -77,4 +77,6 @@ type GuestPhysicalRegion struct {
 type MaterialGuestPhysicalRegion struct {
 	GPR        GuestPhysicalRegion
 	HostBuffer []byte
+	// Attributes is a TDVF-only field to track whether the buffer is measured.
+	Attributes uint32
 }

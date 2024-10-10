@@ -73,11 +73,17 @@ message VMTdx {
     // The amount of RAM in GiB provided to the VM. This is relevant to the
     // construction of the measured TDHOB page that includes memory regions'
     // resource attributes.
+    //
+    // To be deprecated: The TDHOB is no longer measured in newer Google
+    // hypervisor versions.
     uint32 ram_gib = 1;
     // If true, EFI_UNACCEPTED_MEMORY not presented to guest.
     // All memory is accepted by the firmware. Relevant to the TDHOB page
     // since the resource attribute will include
     // EFI_RESOURCE_ATTRIBUTE_NEEDS_EARLY_ACCEPT.
+    //
+    // To be deprecated: The TDHOB is no longer measured in newer Google
+    // hypervisor versions.
     bool early_accept = 2;
     // The SHA-384 digest of the measurement operations for the VM at launch.
     bytes mrtd = 3;
